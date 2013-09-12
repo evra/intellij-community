@@ -39,6 +39,7 @@ import git4idea.changes.GitChangeUtils;
 import git4idea.config.GitExecutableValidator;
 import git4idea.history.browser.SHAHash;
 import git4idea.history.wholeTree.SelectRevisionInGitLogAction;
+import git4idea.i18n.GitBundle;
 import git4idea.repo.GitRepository;
 import git4idea.repo.GitRepositoryManager;
 import org.jetbrains.annotations.NotNull;
@@ -46,6 +47,8 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedList;
 import java.util.List;
 
 /**
@@ -57,12 +60,36 @@ public class GitHistoryProvider implements VcsHistoryProvider, VcsCacheableHisto
 
   @NotNull private final Project myProject;
 
+  public static final ColumnInfo<VcsFileRevision, String> TAG = new ColumnInfo<VcsFileRevision, String>(
+    GitBundle.message("tag.recent.title")
+  ) {
+
+    public String valueOf(VcsFileRevision vcsFileRevision) {
+      if (!(vcsFileRevision instanceof GitFileRevision)) return "";
+      return ((GitFileRevision)vcsFileRevision).getRecentTag();
+    }
+
+    public Comparator<VcsFileRevision> getComparator() {
+      return new Comparator<VcsFileRevision>() {
+        public int compare(VcsFileRevision r1, VcsFileRevision r2) {
+          if (!(r1 instanceof GitFileRevision)) return 1;
+          if (!(r2 instanceof GitFileRevision)) return -1;
+          String r1_tag = ((GitFileRevision)r1).getRecentTag();
+          String r2_tag = ((GitFileRevision)r2).getRecentTag();
+          if (r1_tag == null) return 1;
+          if (r2_tag == null) return -1;
+          return r1_tag.compareTo(r2_tag);
+        }
+      };
+    }
+  };
+
   public GitHistoryProvider(@NotNull Project project) {
     myProject = project;
   }
 
   public VcsDependentHistoryComponents getUICustomization(final VcsHistorySession session, JComponent forShortcutRegistration) {
-    return VcsDependentHistoryComponents.createOnlyColumns(new ColumnInfo[0]);
+    return VcsDependentHistoryComponents.createOnlyColumns(new ColumnInfo[] {TAG});
   }
 
   public AnAction[] getAdditionalActions(Runnable refresher) {
@@ -169,17 +196,39 @@ public class GitHistoryProvider implements VcsHistoryProvider, VcsCacheableHisto
                               ArrayUtil.EMPTY_STRING_ARRAY;
 
     final GitExecutableValidator validator = GitVcs.getInstance(myProject).getExecutableValidator();
-    GitHistoryUtils.history(myProject, refreshPath(path), null, new Consumer<GitFileRevision>() {
+    final LinkedList<GitFileRevision> revisions = new LinkedList<GitFileRevision>();
+    final VcsException[] vcsException = new VcsException[1];
+    FilePath refreshedPath = refreshPath(path);
+    GitHistoryUtils.history(myProject, refreshedPath, null, new Consumer<GitFileRevision>() {
       public void consume(GitFileRevision gitFileRevision) {
-        partner.acceptRevision(gitFileRevision);
+        revisions.add(gitFileRevision);
       }
     }, new Consumer<VcsException>() {
       public void consume(VcsException e) {
         if (validator.checkExecutableAndNotifyIfNeeded()) {
-          partner.reportException(e);
+          vcsException[0] = e;
         }
       }
     }, additionalArgs);
+
+
+    if (vcsException[0] == null) {
+      GitRepositoryManager manager = GitUtil.getRepositoryManager(myProject);
+      GitRepository repository = manager.getRepositoryForFile(refreshedPath);
+      if (repository.getRoot() != null) {
+        GitHistoryUtils.resolveRecentTags(myProject, repository.getRoot(), revisions);
+      }
+    }
+
+    for (GitFileRevision revision : revisions) {
+      partner.acceptRevision(revision);
+    }
+    if (vcsException[0] != null) {
+      partner.reportException(vcsException[0]);
+    }
+
+
+
   }
 
   /**
