@@ -956,6 +956,7 @@ public class GitHistoryUtils {
       committish.add(revision.getHash());
     }
     GitLineHandler h = new GitLineHandler(project, root, GitCommand.DESCRIBE);
+    h.addParameters("--tags");
     h.addParameters("--always");
     h.addParameters("--abbrev=0");
     h.addParameters(committish);
